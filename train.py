@@ -5,7 +5,7 @@ Implements time-series cross-validation.
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional
-from models import create_model, NeuralNetworkModel, SpeciesCooccurrenceModel
+from models import create_model, NeuralNetworkModel, SpeciesCooccurrenceModel, BaselinePopularityModel
 from prepare_training_data import prepare_all_cv_data
 import json
 import os
@@ -213,8 +213,9 @@ def evaluate_model(model, fold_data: Dict, top_k: int = 10) -> Dict:
     }
     
     # Evaluate count predictions if model supports it
+    predicted_counts = None
     if isinstance(model, NeuralNetworkModel) and model.predict_count:
-        # Get count predictions
+        # Get count predictions from neural model
         test_input = fold_data['test_X']
         if fold_data.get('test_features') is not None:
             test_input = [fold_data['test_X'], fold_data['test_features']]
@@ -228,28 +229,31 @@ def evaluate_model(model, fold_data: Dict, top_k: int = 10) -> Dict:
             predicted_counts = model_output[1].flatten()
         else:
             predicted_counts = None
+    elif isinstance(model, BaselinePopularityModel):
+        # Baseline model: use naive count prediction (mean count)
+        predicted_counts = model.predict_count(fold_data['test_X'])
+    
+    if predicted_counts is not None:
+        # Get actual total bird counts (not species counts)
+        actual_bird_counts = None
+        if fold_data.get('raw_data') is not None:
+            test_transition = fold_data.get('test_transition')
+            if test_transition:
+                year_to = test_transition[1]
+                test_transitions_df = fold_data.get('test_transitions_df')
+                if test_transitions_df is not None:
+                    actual_bird_counts = extract_bird_counts(
+                        test_transitions_df,
+                        fold_data['raw_data'],
+                        year_to
+                    )
         
-        if predicted_counts is not None:
-            # Get actual total bird counts (not species counts)
-            actual_bird_counts = None
-            if fold_data.get('raw_data') is not None:
-                test_transition = fold_data.get('test_transition')
-                if test_transition:
-                    year_to = test_transition[1]
-                    test_transitions_df = fold_data.get('test_transitions_df')
-                    if test_transitions_df is not None:
-                        actual_bird_counts = extract_bird_counts(
-                            test_transitions_df,
-                            fold_data['raw_data'],
-                            year_to
-                        )
-            
-            # Fallback to species count if bird count not available
-            if actual_bird_counts is None:
-                actual_bird_counts = None  # Will use default in evaluate_count_predictions
-            
-            count_metrics = evaluate_count_predictions(y_true, predicted_counts, actual_counts=actual_bird_counts)
-            metrics.update(count_metrics)
+        # Fallback to species count if bird count not available
+        if actual_bird_counts is None:
+            actual_bird_counts = None  # Will use default in evaluate_count_predictions
+        
+        count_metrics = evaluate_count_predictions(y_true, predicted_counts, actual_counts=actual_bird_counts)
+        metrics.update(count_metrics)
     
     return metrics
 

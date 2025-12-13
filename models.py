@@ -13,9 +13,11 @@ class BaselinePopularityModel:
     """
     Baseline model: predicts most popular species overall.
     Naive baseline: uses fixed popular species, doesn't update across folds.
+    Also provides naive count prediction (mean count).
     """
     def __init__(self):
         self.popular_species = None
+        self.mean_count = None  # For naive count prediction
     
     def fit(self, X: np.ndarray, y: np.ndarray):
         """
@@ -33,6 +35,11 @@ class BaselinePopularityModel:
             species_counts = y.sum(axis=0)
             # Get top species indices
             self.popular_species = np.argsort(species_counts)[::-1]
+        
+        # Learn mean count for naive count prediction (only if not set)
+        if self.mean_count is None:
+            # Calculate mean number of species per birder
+            self.mean_count = np.mean(np.sum(y, axis=1))
     
     def predict(self, X: np.ndarray, top_k: int = 10) -> np.ndarray:
         """
@@ -60,6 +67,23 @@ class BaselinePopularityModel:
                 predictions[i, species_idx] = 1.0
         
         return predictions
+    
+    def predict_count(self, X: np.ndarray) -> np.ndarray:
+        """
+        Predict count using naive baseline: always predict the mean count.
+        
+        Args:
+            X: Input matrix (birder-species) - not used, but kept for API consistency
+        
+        Returns:
+            Array of predicted counts (all same value: mean_count)
+        """
+        if self.mean_count is None:
+            raise ValueError("Model must be fitted first")
+        
+        n_birders = X.shape[0]
+        # Return array of mean_count for all birders
+        return np.full(n_birders, self.mean_count, dtype=np.float32)
 
 
 class SpeciesCooccurrenceModel:
