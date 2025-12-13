@@ -259,10 +259,11 @@ def extract_bird_counts(transitions_df: pd.DataFrame,
                        year_to: int) -> np.ndarray:
     """
     Extract total bird counts (not species counts) for each birder in target year.
+    Works with both raw data and birder_species aggregated data.
     
     Args:
         transitions_df: DataFrame with transition pairs
-        raw_data: Dictionary mapping year to raw DataFrame
+        raw_data: Dictionary mapping year to DataFrame (raw or birder_species)
         year_to: Target year to extract counts from
     
     Returns:
@@ -275,13 +276,28 @@ def extract_bird_counts(transitions_df: pd.DataFrame,
     
     df_year = raw_data[year_to]
     
+    # Check if this is birder_species format (has 'total_observations' column)
+    # vs raw data format (has 'observation_count' column)
+    is_birder_species_format = 'total_observations' in df_year.columns
+    
     for _, row in transitions_df.iterrows():
         observer_id = row['observer_id']
         birder_data = df_year[df_year['observer_id'] == observer_id]
         
-        if len(birder_data) > 0 and 'observation_count' in birder_data.columns:
-            total_birds = birder_data['observation_count'].sum()
-            bird_counts.append(total_birds)
+        if len(birder_data) > 0:
+            if is_birder_species_format:
+                # birder_species format: total_observations is already aggregated
+                total_birds = birder_data.iloc[0]['total_observations']
+                if pd.notna(total_birds):
+                    bird_counts.append(float(total_birds))
+                else:
+                    bird_counts.append(0.0)
+            elif 'observation_count' in birder_data.columns:
+                # Raw data format: sum individual observations
+                total_birds = birder_data['observation_count'].sum()
+                bird_counts.append(float(total_birds))
+            else:
+                bird_counts.append(0.0)
         else:
             bird_counts.append(0.0)
     
@@ -320,6 +336,11 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
     
     results = {}
     
+    # For naive baseline: create once and reuse across folds
+    baseline_model = None
+    if 'baseline' in model_types:
+        baseline_model = create_model('baseline')
+    
     for model_type in model_types:
         print(f"\n{'='*60}")
         print(f"Training {model_type} model")
@@ -334,34 +355,83 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
             print(f"  Test shape: {fold_data['test_X'].shape}")
             sys.stdout.flush()
             
-            # Create model
-            params = model_params.get(model_type, {}).copy()
-            if model_type == 'neural':
-                params['n_species'] = fold_data['n_species']
-                # Add feature dimension if features available
-                if fold_data.get('train_features') is not None:
-                    params['n_additional_features'] = fold_data['train_features'].shape[1]
-            elif model_type == 'collaborative':
-                # Add species features if available
-                if 'species_features' in fold_data:
-                    params['species_features'] = fold_data['species_features']
-            
-            model = create_model(model_type, **params)
-            
-            # Train model
-            print("  Training...")
-            sys.stdout.flush()
+            # Initialize training_history (only neural models set this)
             training_history = None
+            
+            # Create model (or reuse baseline)
+            if model_type == 'baseline' and baseline_model is not None:
+                model = baseline_model
+                # Only fit on first fold for naive baseline
+                if fold_idx == 1:
+                    print("  Training...")
+                    sys.stdout.flush()
+                    model.fit(fold_data['train_X'], fold_data['train_y'])
+                else:
+                    # Skip fitting for subsequent folds (naive baseline doesn't update)
+                    print("  Skipping training (naive baseline uses fixed popular species from fold 1)...")
+                    sys.stdout.flush()
+            else:
+                params = model_params.get(model_type, {}).copy()
+                if model_type == 'neural':
+                    params['n_species'] = fold_data['n_species']
+                    # Add feature dimension if features available
+                    if fold_data.get('train_features') is not None:
+                        params['n_additional_features'] = fold_data['train_features'].shape[1]
+                elif model_type == 'collaborative':
+                    # Add species features if available
+                    if 'species_features' in fold_data:
+                        params['species_features'] = fold_data['species_features']
+                
+                model = create_model(model_type, **params)
+                
+                # Train model
+                print("  Training...")
+                sys.stdout.flush()
+                training_history = None
             if model_type == 'neural':
                 # Use a subset for validation
                 n_val = min(1000, fold_data['train_X'].shape[0] // 10)
                 val_indices = np.random.choice(fold_data['train_X'].shape[0], n_val, replace=False)
                 train_indices = np.setdiff1d(np.arange(fold_data['train_X'].shape[0]), val_indices)
                 
+                # Ensure indices are arrays (not scalars) to maintain 2D shape when indexing
+                train_indices = np.atleast_1d(train_indices)
+                val_indices = np.atleast_1d(val_indices)
+                
+                # Ensure indices are arrays (not scalars) to maintain 2D shape when indexing
+                train_indices = np.atleast_1d(train_indices)
+                val_indices = np.atleast_1d(val_indices)
+                
                 X_train = fold_data['train_X'][train_indices]
                 y_train = fold_data['train_y'][train_indices]
                 X_val = fold_data['train_X'][val_indices]
                 y_val = fold_data['train_y'][val_indices]
+                
+                # Ensure y_train and y_val are contiguous copies (not views) to prevent shape issues
+                y_train = np.ascontiguousarray(y_train.copy(), dtype=np.float32)
+                y_val = np.ascontiguousarray(y_val.copy(), dtype=np.float32)
+                
+                # Debug: print shapes to help diagnose
+                print(f"  DEBUG: train_y shape: {fold_data['train_y'].shape}, train_indices shape: {train_indices.shape}, y_train shape: {y_train.shape}")
+                print(f"  DEBUG: X_train shape: {X_train.shape}, y_train shape: {y_train.shape}, y_train.ndim: {y_train.ndim}")
+                print(f"  DEBUG: y_train is view: {not y_train.flags['OWNDATA']}, y_val is view: {not y_val.flags['OWNDATA']}")
+                
+                # Ensure y_train and y_val are 2D
+                if y_train.ndim == 1:
+                    # Reshape to (n_samples, n_species) - this shouldn't happen but handle it
+                    raise ValueError(f"y_train is 1D with shape {y_train.shape}, expected 2D (n_samples, n_species). "
+                                   f"train_indices shape: {train_indices.shape}, train_y shape: {fold_data['train_y'].shape}. "
+                                   f"This suggests train_indices might be a scalar or incorrectly shaped.")
+                if y_val.ndim == 1:
+                    raise ValueError(f"y_val is 1D with shape {y_val.shape}, expected 2D (n_samples, n_species). "
+                                   f"val_indices shape: {val_indices.shape}, train_y shape: {fold_data['train_y'].shape}. "
+                                   f"This suggests val_indices might be a scalar or incorrectly shaped.")
+                
+                # Ensure shapes match expectations
+                if y_train.shape[1] != fold_data['n_species']:
+                    raise ValueError(f"y_train has {y_train.shape[1]} species but expected {fold_data['n_species']} species")
+                if y_val.shape[1] != fold_data['n_species']:
+                    raise ValueError(f"y_val has {y_val.shape[1]} species but expected {fold_data['n_species']} species")
                 
                 # Extract total bird counts (not species counts)
                 train_bird_counts = None
@@ -393,33 +463,86 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
                             all_train_counts = np.array(all_train_counts, dtype=np.float32)
                             train_bird_counts = all_train_counts[train_indices]
                             val_bird_counts = all_train_counts[val_indices]
+                            print(f"  DEBUG: Extracted bird counts - all_train_counts.shape={all_train_counts.shape}, "
+                                  f"train_bird_counts.shape={train_bird_counts.shape}, val_bird_counts.shape={val_bird_counts.shape}")
+                        else:
+                            print(f"  DEBUG: Bird count extraction failed - len(all_train_counts)={len(all_train_counts)}, "
+                                  f"fold_data['train_X'].shape[0]={fold_data['train_X'].shape[0]}")
+                            train_bird_counts = None
+                            val_bird_counts = None
                 
                 # Include features if available
                 X_train_features = None
                 X_val_features = None
-                if fold_data.get('train_features') is not None:
-                    X_train_features = fold_data['train_features'][train_indices]
-                    X_val_features = fold_data['train_features'][val_indices]
+                train_features_full = fold_data.get('train_features')
+                if train_features_full is not None:
+                    # Check if features array is valid (not empty, correct shape)
+                    if not isinstance(train_features_full, np.ndarray):
+                        print(f"  WARNING: train_features is not a numpy array: {type(train_features_full)}. Skipping features.")
+                        X_train_features = None
+                        X_val_features = None
+                    elif train_features_full.size == 0:
+                        print(f"  WARNING: train_features is empty. Skipping features.")
+                        X_train_features = None
+                        X_val_features = None
+                    elif len(train_features_full.shape) != 2:
+                        print(f"  WARNING: train_features has wrong number of dimensions: {train_features_full.shape}. Skipping features.")
+                        X_train_features = None
+                        X_val_features = None
+                    elif train_features_full.shape[0] != fold_data['train_X'].shape[0]:
+                        print(f"  WARNING: train_features shape mismatch! train_features.shape[0]={train_features_full.shape[0]}, "
+                              f"train_X.shape[0]={fold_data['train_X'].shape[0]}. Skipping features.")
+                        X_train_features = None
+                        X_val_features = None
+                    else:
+                        # Features are valid - extract subsets
+                        X_train_features = train_features_full[train_indices]
+                        X_val_features = train_features_full[val_indices]
+                        # Ensure feature arrays are contiguous copies
+                        X_train_features = np.ascontiguousarray(X_train_features.copy(), dtype=np.float32)
+                        X_val_features = np.ascontiguousarray(X_val_features.copy(), dtype=np.float32)
+                        print(f"  DEBUG: Features extracted - X_train_features.shape={X_train_features.shape}, "
+                              f"X_val_features.shape={X_val_features.shape}, "
+                              f"train_features_full.shape={train_features_full.shape}")
                 
                 if X_train_features is not None:
                     if train_bird_counts is not None:
+                        # Debug: Check shapes right before fit
+                        print(f"  DEBUG train.py (with features): y_train.shape={y_train.shape}, y_train.ndim={y_train.ndim}, y_val.shape={y_val.shape}, y_val.ndim={y_val.ndim}, train_bird_counts.shape={train_bird_counts.shape if train_bird_counts is not None else None}")
+                        if y_train.ndim != 2:
+                            raise ValueError(f"y_train is not 2D right before model.fit(): shape={y_train.shape}")
+                        if y_val.ndim != 2:
+                            raise ValueError(f"y_val is not 2D right before model.fit(): shape={y_val.shape}")
                         training_history = model.fit(X_train, y_train, X_features=X_train_features,
                                                      y_bird_count=train_bird_counts,
                                                      validation_data=(X_val, X_val_features, y_val, val_bird_counts),
                                                      epochs=20, batch_size=256, verbose=0)
                     else:
+                        # Debug: Check shapes right before fit
+                        print(f"  DEBUG train.py (with features, no counts): y_train.shape={y_train.shape}, y_train.ndim={y_train.ndim}, y_val.shape={y_val.shape}, y_val.ndim={y_val.ndim}")
+                        if y_train.ndim != 2:
+                            raise ValueError(f"y_train is not 2D right before model.fit(): shape={y_train.shape}")
+                        if y_val.ndim != 2:
+                            raise ValueError(f"y_val is not 2D right before model.fit(): shape={y_val.shape}")
                         training_history = model.fit(X_train, y_train, X_features=X_train_features,
                                                      validation_data=(X_val, X_val_features, y_val),
                                                      epochs=20, batch_size=256, verbose=0)
                 else:
                     if train_bird_counts is not None:
+                        # Debug: Check shapes right before fit
+                        print(f"  DEBUG train.py: y_train.shape={y_train.shape}, y_train.ndim={y_train.ndim}, y_val.shape={y_val.shape}, y_val.ndim={y_val.ndim}, train_bird_counts.shape={train_bird_counts.shape if train_bird_counts is not None else None}")
+                        if y_train.ndim != 2:
+                            raise ValueError(f"y_train is not 2D right before model.fit(): shape={y_train.shape}")
+                        if y_val.ndim != 2:
+                            raise ValueError(f"y_val is not 2D right before model.fit(): shape={y_val.shape}")
+                        # Pass 4 elements: (X_val, None, y_val, val_bird_counts) when no features but have bird counts
                         training_history = model.fit(X_train, y_train, y_bird_count=train_bird_counts,
-                                                     validation_data=(X_val, y_val, val_bird_counts),
+                                                     validation_data=(X_val, None, y_val, val_bird_counts),
                                                      epochs=20, batch_size=256, verbose=0)
                     else:
                         training_history = model.fit(X_train, y_train, validation_data=(X_val, y_val),
                                                      epochs=20, batch_size=256, verbose=0)
-            else:
+            elif model_type != 'baseline':  # Baseline already handled above
                 model.fit(fold_data['train_X'], fold_data['train_y'])
             
             # Evaluate

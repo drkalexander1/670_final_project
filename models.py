@@ -12,6 +12,7 @@ from tensorflow.keras import layers
 class BaselinePopularityModel:
     """
     Baseline model: predicts most popular species overall.
+    Naive baseline: uses fixed popular species, doesn't update across folds.
     """
     def __init__(self):
         self.popular_species = None
@@ -19,15 +20,19 @@ class BaselinePopularityModel:
     def fit(self, X: np.ndarray, y: np.ndarray):
         """
         Learn most popular species from training data.
+        For naive baseline: only update if not already set.
         
         Args:
             X: Training input (birder-species matrix)
             y: Training targets (birder-species matrix for next year)
         """
-        # Calculate species popularity (how many birders viewed each species)
-        species_counts = y.sum(axis=0)
-        # Get top species indices
-        self.popular_species = np.argsort(species_counts)[::-1]
+        # Naive baseline: only set popular_species if not already set
+        # This prevents updating across folds
+        if self.popular_species is None:
+            # Calculate species popularity (how many birders viewed each species)
+            species_counts = y.sum(axis=0)
+            # Get top species indices
+            self.popular_species = np.argsort(species_counts)[::-1]
     
     def predict(self, X: np.ndarray, top_k: int = 10) -> np.ndarray:
         """
@@ -303,6 +308,29 @@ class NeuralNetworkModel:
         """
         n_birders = X.shape[0]
         
+        # Ensure y is 2D with shape (n_samples, n_species)
+        if y.ndim == 1:
+            # If y is 1D, this is wrong for species prediction - raise error immediately
+            raise ValueError(
+                f"y is 1D with shape {y.shape}, but must be 2D (n_samples, n_species). "
+                f"Expected shape: ({X.shape[0]}, {self.n_species}). "
+                f"This is a bug - y should never be 1D for species prediction. "
+                f"Please check how y is being extracted/prepared."
+            )
+        if y.ndim != 2:
+            raise ValueError(f"y must be 2D with shape (n_samples, n_species), but got shape {y.shape} with ndim={y.ndim}")
+        
+        if y.shape[0] != X.shape[0]:
+            raise ValueError(f"y and X must have same number of samples. Got y.shape[0]={y.shape[0]}, X.shape[0]={X.shape[0]}")
+        
+        # If y has wrong number of species, that's also a problem
+        if y.shape[1] != self.n_species:
+            raise ValueError(
+                f"y has {y.shape[1]} species but model expects {self.n_species} species. "
+                f"y.shape={y.shape}, X.shape={X.shape}. "
+                f"This will cause shape mismatches in the model."
+            )
+        
         # Update n_additional_features if features provided
         if X_features is not None and self.n_additional_features == 0:
             self.n_additional_features = X_features.shape[1]
@@ -318,25 +346,53 @@ class NeuralNetworkModel:
             train_inputs = X
         
         # Prepare targets (include count if predicting count)
+        # Double-check y is 2D before using it
+        if y.ndim != 2:
+            raise ValueError(f"y must be 2D before creating targets, but got shape {y.shape} with ndim={y.ndim}")
+        
         if self.predict_count:
             if y_bird_count is not None:
                 y_count = y_bird_count.reshape(-1, 1).astype(np.float32)
             else:
                 # Fallback to species count if bird count not provided
-                # Ensure y is 2D for proper counting
+                # Ensure y is 2D for proper counting, but don't modify original y
+                y_for_count = y
                 if y.ndim == 1:
-                    y = y.reshape(-1, 1)
-                y_count = np.sum(y, axis=1, keepdims=True).astype(np.float32)
-            train_targets = {'species_predictions': y, 'species_count': y_count}
+                    y_for_count = y.reshape(-1, 1)
+                y_count = np.sum(y_for_count, axis=1, keepdims=True).astype(np.float32)
+            # Ensure y is a contiguous copy with correct dtype
+            y_copy = np.ascontiguousarray(y.copy(), dtype=np.float32)
+            if y_copy.ndim != 2:
+                raise ValueError(f"y_copy is not 2D after copy: shape={y_copy.shape}, original y.shape={y.shape}")
+            train_targets = {'species_predictions': y_copy, 'species_count': y_count}
+            
+            # Verify train_targets has correct shapes
+            if train_targets['species_predictions'].ndim != 2:
+                raise ValueError(f"train_targets['species_predictions'] is not 2D: shape={train_targets['species_predictions'].shape}")
+            if train_targets['species_predictions'].shape[1] != self.n_species:
+                raise ValueError(f"train_targets['species_predictions'] has wrong number of species: "
+                               f"got {train_targets['species_predictions'].shape[1]}, expected {self.n_species}")
         else:
-            train_targets = y
+            train_targets = y.copy() if isinstance(y, np.ndarray) else y
         
         # Prepare validation data
         val_data = None
         if validation_data is not None:
             if len(validation_data) == 4:  # (X_val, X_val_features, y_val, y_val_bird_count)
                 X_val, X_val_features, y_val, y_val_bird_count = validation_data
-                if X_features is not None:
+                
+                # Ensure y_val is 2D before processing
+                if y_val.ndim != 2:
+                    raise ValueError(f"y_val must be 2D in validation_data, but got shape {y_val.shape} with ndim={y_val.ndim}")
+                
+                # Ensure X_features and X_val_features are consistent
+                if X_features is not None and X_val_features is None:
+                    raise ValueError("X_features provided but X_val_features is None in validation_data")
+                if X_features is None and X_val_features is not None:
+                    # This is inconsistent but handle it - use validation features
+                    print(f"  WARNING: X_features is None but X_val_features provided. Using validation features.")
+                    val_inputs = [X_val, X_val_features]
+                elif X_features is not None:
                     val_inputs = [X_val, X_val_features]
                 else:
                     val_inputs = X_val
@@ -345,38 +401,63 @@ class NeuralNetworkModel:
                     if y_val_bird_count is not None:
                         y_val_count = y_val_bird_count.reshape(-1, 1).astype(np.float32)
                     else:
-                        # Ensure y_val is 2D for proper counting
+                        # Fallback to species count if bird count not provided
+                        # Ensure y_val is 2D for proper counting, but don't modify original y_val
+                        y_val_for_count = y_val
                         if y_val.ndim == 1:
-                            y_val = y_val.reshape(-1, 1)
-                        y_val_count = np.sum(y_val, axis=1, keepdims=True).astype(np.float32)
-                    val_data = (val_inputs, {'species_predictions': y_val, 'species_count': y_val_count})
+                            y_val_for_count = y_val.reshape(-1, 1)
+                        y_val_count = np.sum(y_val_for_count, axis=1, keepdims=True).astype(np.float32)
+                    y_val_copy = np.ascontiguousarray(y_val.copy(), dtype=np.float32)
+                    if y_val_copy.ndim != 2:
+                        raise ValueError(f"y_val_copy is not 2D after copy: shape={y_val_copy.shape}, original y_val.shape={y_val.shape}")
+                    val_data = (val_inputs, {'species_predictions': y_val_copy, 'species_count': y_val_count})
                 else:
-                    val_data = (val_inputs, y_val)
+                    val_data = (val_inputs, y_val.copy() if isinstance(y_val, np.ndarray) else y_val)
             elif len(validation_data) == 3:  # (X_val, X_val_features, y_val)
                 X_val, X_val_features, y_val = validation_data
-                if X_features is not None:
+                
+                # Ensure y_val is 2D before processing
+                if y_val.ndim != 2:
+                    raise ValueError(f"y_val must be 2D in validation_data, but got shape {y_val.shape} with ndim={y_val.ndim}")
+                
+                # Ensure X_features and X_val_features are consistent
+                if X_features is not None and X_val_features is None:
+                    raise ValueError("X_features provided but X_val_features is None in validation_data")
+                if X_features is None and X_val_features is not None:
+                    # This is inconsistent but handle it - use validation features
+                    print(f"  WARNING: X_features is None but X_val_features provided. Using validation features.")
+                    val_inputs = [X_val, X_val_features]
+                elif X_features is not None:
                     val_inputs = [X_val, X_val_features]
                 else:
                     val_inputs = X_val
                 
                 if self.predict_count:
-                    # Ensure y_val is 2D for proper counting
+                    # Fallback to species count if bird count not provided
+                    # Ensure y_val is 2D for proper counting, but don't modify original y_val
+                    y_val_for_count = y_val
                     if y_val.ndim == 1:
-                        # If 1D, reshape to (n_samples, 1) - each sample has one species count
-                        y_val = y_val.reshape(-1, 1)
-                    y_val_count = np.sum(y_val, axis=1, keepdims=True).astype(np.float32)
-                    val_data = (val_inputs, {'species_predictions': y_val, 'species_count': y_val_count})
+                        y_val_for_count = y_val.reshape(-1, 1)
+                    y_val_count = np.sum(y_val_for_count, axis=1, keepdims=True).astype(np.float32)
+                    y_val_copy = np.ascontiguousarray(y_val.copy(), dtype=np.float32)
+                    if y_val_copy.ndim != 2:
+                        raise ValueError(f"y_val_copy is not 2D after copy: shape={y_val_copy.shape}, original y_val.shape={y_val.shape}")
+                    val_data = (val_inputs, {'species_predictions': y_val_copy, 'species_count': y_val_count})
                 else:
-                    val_data = (val_inputs, y_val)
+                    val_data = (val_inputs, y_val.copy() if isinstance(y_val, np.ndarray) else y_val)
             elif len(validation_data) == 2:  # (X_val, y_val)
                 X_val, y_val = validation_data
                 if self.predict_count:
-                    # Ensure y_val is 2D for proper counting
+                    # Fallback to species count if bird count not provided
+                    # Ensure y_val is 2D for proper counting, but don't modify original y_val
+                    y_val_for_count = y_val
                     if y_val.ndim == 1:
-                        # If 1D, reshape to (n_samples, 1) - each sample has one species count
-                        y_val = y_val.reshape(-1, 1)
-                    y_val_count = np.sum(y_val, axis=1, keepdims=True).astype(np.float32)
-                    val_data = (X_val, {'species_predictions': y_val, 'species_count': y_val_count})
+                        y_val_for_count = y_val.reshape(-1, 1)
+                    y_val_count = np.sum(y_val_for_count, axis=1, keepdims=True).astype(np.float32)
+                    y_val_copy = np.ascontiguousarray(y_val.copy(), dtype=np.float32)
+                    if y_val_copy.ndim != 2:
+                        raise ValueError(f"y_val_copy is not 2D after copy: shape={y_val_copy.shape}, original y_val.shape={y_val.shape}")
+                    val_data = (X_val, {'species_predictions': y_val_copy, 'species_count': y_val_count})
                 else:
                     val_data = validation_data
         
@@ -385,6 +466,18 @@ class NeuralNetworkModel:
             keras.callbacks.EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True),
             keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3)
         ]
+        
+        # Debug: Check train_targets shape right before fit
+        if isinstance(train_targets, dict):
+            if 'species_predictions' in train_targets:
+                y_debug = train_targets['species_predictions']
+                print(f"  DEBUG models.py: train_targets['species_predictions'].shape={y_debug.shape}, ndim={y_debug.ndim}")
+                if y_debug.ndim != 2:
+                    raise ValueError(f"train_targets['species_predictions'] is not 2D right before fit: shape={y_debug.shape}")
+        elif isinstance(train_targets, np.ndarray):
+            print(f"  DEBUG models.py: train_targets.shape={train_targets.shape}, ndim={train_targets.ndim}")
+            if train_targets.ndim != 2:
+                raise ValueError(f"train_targets is not 2D right before fit: shape={train_targets.shape}")
         
         history = self.model.fit(
             train_inputs, train_targets,

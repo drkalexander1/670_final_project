@@ -118,7 +118,12 @@ def extract_comprehensive_temporal_features(transitions_df: pd.DataFrame,
                 }
                 
                 # Count features
-                num_checklists = birder_data['checklist_id'].nunique()
+                # Use locality_id as proxy for checklists (consistent with birder_species version)
+                if 'locality_id' in birder_data.columns:
+                    num_checklists = birder_data['locality_id'].nunique()
+                else:
+                    # Fallback: if locality_id not available, use 0
+                    num_checklists = 0
                 num_species = birder_data['scientific_name'].nunique()
                 feat_dict['num_checklists'] = num_checklists
                 feat_dict['num_species'] = num_species
