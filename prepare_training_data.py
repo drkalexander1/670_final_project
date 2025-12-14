@@ -419,10 +419,15 @@ def prepare_all_cv_data(transitions_df: pd.DataFrame,
         print(f"\nPreparing fold {cv_split['fold']} data...")
         
         # Load data for this fold if using lazy loading
+        # Load raw_data if data_loader_func is provided (even if extract_features=False)
+        # This allows evaluation to use bird counts instead of species counts
         fold_raw_data = raw_data
-        if extract_features and data_loader_func is not None:
+        if data_loader_func is not None:
             years_needed = get_years_needed_for_fold(cv_split)
-            print(f"  Loading data for years: {years_needed}")
+            if extract_features:
+                print(f"  Loading data for years: {years_needed}")
+            else:
+                print(f"  Loading data for evaluation (bird counts): {years_needed}")
             fold_raw_data = {}
             for year in years_needed:
                 fold_raw_data[year] = data_loader_func(year)
@@ -440,10 +445,12 @@ def prepare_all_cv_data(transitions_df: pd.DataFrame,
             print(f"  Test features: {fold_data['test_features'].shape}")
         
         # Free memory for this fold's raw data if we loaded it lazily
-        if extract_features and data_loader_func is not None:
-            del fold_raw_data
-            import gc
-            gc.collect()
+        # Note: We keep raw_data in fold_data for evaluation even if not extracting features
+        # Only free if we're not keeping it (which we are, so this is mainly for memory management)
+        if data_loader_func is not None and not extract_features:
+            # For non-feature extraction, raw_data is kept in fold_data for evaluation
+            # Memory will be freed when fold_data goes out of scope
+            pass
     
     return prepared_folds
 

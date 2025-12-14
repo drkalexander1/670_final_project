@@ -66,11 +66,26 @@ print("\n" + "="*60)
 print("Training models WITHOUT additional features")
 print("="*60)
 sys.stdout.flush()
+
+# Create a data loader function for lazy loading birder_species files
+# We need this even when use_features=False to ensure raw_data is loaded for count evaluation
+def load_birder_species_data_for_eval(year: int):
+    """Load birder_species file for a single year - called on-demand per fold"""
+    print(f"    Loading birder_species_{year}.parquet...")
+    birder_species_file = f"birder_species_{year}.parquet"
+    if not os.path.exists(birder_species_file):
+        raise FileNotFoundError(f"birder_species file not found: {birder_species_file}")
+    df = pd.read_parquet(birder_species_file)
+    print(f"    Loaded {len(df):,} birder-year pairs for year {year}")
+    return df
+
 results_no_features = train_and_evaluate_cv(
     transitions,
     model_types=['baseline', 'collaborative', 'user_collaborative', 'neural'],
     model_params=model_params,
-    use_features=False
+    raw_data=None,  # Don't pre-load all data
+    use_features=False,  # Don't extract features, but still load raw_data for count evaluation
+    data_loader_func=load_birder_species_data_for_eval  # Load raw_data for evaluation
 )
 
 # Step 5: Train WITH features (using lazy loading)
@@ -100,9 +115,20 @@ results_with_features = train_and_evaluate_cv(
     data_loader_func=load_birder_species_data  # Use birder_species loading
 )
 
-# Add baseline to with_features results (baseline doesn't use features, so use same results)
-# This ensures baseline appears in graphs and reports for comparison
-results_with_features['baseline'] = results_no_features['baseline']
+# Add baseline to with_features results - re-evaluate with raw_data for fair count comparison
+# Baseline doesn't use features, but we need it evaluated with raw_data so count predictions
+# use bird counts (not species counts) for fair comparison with neural model
+print("\nRe-evaluating baseline with raw_data loaded for fair count prediction comparison...")
+sys.stdout.flush()
+baseline_results_with_raw_data = train_and_evaluate_cv(
+    transitions,
+    model_types=['baseline'],
+    model_params={},
+    raw_data=None,
+    use_features=True,  # This ensures raw_data is loaded via data_loader_func (even though baseline doesn't use features)
+    data_loader_func=load_birder_species_data  # Use the same loader function
+)
+results_with_features['baseline'] = baseline_results_with_raw_data['baseline']
 
 # Step 6: Compare results
 print("\n" + "="*60)

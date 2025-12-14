@@ -504,7 +504,16 @@ class NeuralNetworkModel:
         # Multi-task: Also predict count of species
         outputs = [species_output]
         if self.predict_count:
-            count_output = layers.Dense(1, activation='relu', name='species_count')(x)
+            # Add regularization and better activation for count prediction
+            # Use softplus instead of ReLU for smoother, more stable predictions
+            # Add L2 regularization to prevent extreme values
+            count_output = layers.Dense(
+                1, 
+                activation='softplus',  # Changed from 'relu' - smoother, helps prevent extreme values
+                kernel_regularizer=keras.regularizers.l2(0.01),  # L2 regularization
+                bias_regularizer=keras.regularizers.l2(0.01),
+                name='species_count'
+            )(x)
             outputs.append(count_output)
         
         # Create model with appropriate inputs
@@ -521,13 +530,13 @@ class NeuralNetworkModel:
             alpha=0.01
         )
         
-        # IMPROVEMENT: Add label smoothing and reduce count prediction weight
+        # IMPROVEMENT: Add label smoothing and increase count prediction weight
         if self.predict_count:
             model.compile(
                 optimizer=keras.optimizers.Adam(learning_rate=lr_schedule),
                 loss={'species_predictions': keras.losses.BinaryCrossentropy(label_smoothing=0.1),
                       'species_count': 'mse'},
-                loss_weights={'species_predictions': 1.0, 'species_count': 0.05},  # Reduced from 0.1
+                loss_weights={'species_predictions': 1.0, 'species_count': 0.3},  # Increased from 0.05 to 0.3
                 metrics={'species_predictions': ['accuracy', 'precision', 'recall'],
                         'species_count': ['mae']}
             )
@@ -715,6 +724,8 @@ class NeuralNetworkModel:
                     val_data = validation_data
         
         # IMPROVEMENT: Better callbacks with increased patience
+        # Note: ReduceLROnPlateau removed because optimizer uses LearningRateSchedule (CosineDecay)
+        # which doesn't allow learning rate modification by callbacks
         callbacks = [
             keras.callbacks.EarlyStopping(
                 monitor='val_loss',
@@ -722,15 +733,8 @@ class NeuralNetworkModel:
                 restore_best_weights=True,
                 min_delta=1e-5
             ),
-            keras.callbacks.ReduceLROnPlateau(
-                monitor='val_loss',
-                factor=0.5,
-                patience=7,  # Increased from 3
-                min_lr=1e-6,
-                verbose=1
-            ),
             keras.callbacks.ModelCheckpoint(
-                'best_model_weights.h5',
+                'best_model_weights.weights.h5',  # Must end in .weights.h5 when save_weights_only=True
                 monitor='val_loss',
                 save_best_only=True,
                 save_weights_only=True,

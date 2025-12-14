@@ -233,6 +233,11 @@ def evaluate_model(model, fold_data: Dict, top_k: int = 10) -> Dict:
             predicted_counts = model_output[1].flatten()
         else:
             predicted_counts = None
+        
+        # Clip predictions to reasonable range (0 to 10,000) to prevent extreme outliers
+        # This handles cases where the model outputs unrealistic values despite regularization
+        if predicted_counts is not None:
+            predicted_counts = np.clip(predicted_counts, 0, 10000)
     elif isinstance(model, BaselinePopularityModel):
         # Baseline model: use naive count prediction (mean count)
         predicted_counts = model.predict_count(fold_data['test_X'])
