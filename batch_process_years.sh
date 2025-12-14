@@ -16,7 +16,7 @@
 #SBATCH --mail-type=BEGIN,END
 #SBATCH --output=/home/drkalex/670_final_project/results/bird_training_%j.out
 #SBATCH --error=/home/drkalex/670_final_project/results/bird_training_%j.err
-#SBATCH --time=06:00:00
+#SBATCH --time=08:00:00
 
 # Activate virtual environment
 source /home/drkalex/670_final_project/venv/bin/activate

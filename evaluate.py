@@ -104,6 +104,26 @@ def plot_cv_results_full(results: Dict, output_file: str = None):
     metrics = ['precision_full', 'recall_full', 'map_full']
     metric_labels = ['Precision (Full)', 'Recall (Full)', 'MAP (Full)']
     
+    # Check if any models have full metrics
+    has_full_metrics = any(
+        'precision_full' in r for model_results in results.values() 
+        for r in model_results.get('fold_results', [])
+    )
+    
+    if not has_full_metrics:
+        print("Warning: No full evaluation metrics found in results. Skipping full metrics plot.")
+        if output_file:
+            # Create empty plot with message
+            fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+            for ax, label in zip(axes, metric_labels):
+                ax.text(0.5, 0.5, 'No data available\n(Run training with updated code)', 
+                       ha='center', va='center', transform=ax.transAxes, fontsize=12)
+                ax.set_title(label)
+            plt.tight_layout()
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.close()
+        return
+    
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     
     for idx, (metric, label) in enumerate(zip(metrics, metric_labels)):
@@ -111,20 +131,17 @@ def plot_cv_results_full(results: Dict, output_file: str = None):
         
         # Extract fold results for each model
         fold_data = []
+        valid_model_names = []
         for model_name in model_names:
-            fold_results = results[model_name]['fold_results']
-            values = [r.get(metric, 0) for r in fold_results if metric in r]
+            fold_results = results[model_name].get('fold_results', [])
+            values = [r.get(metric) for r in fold_results if metric in r]
             if values:  # Only add if metric exists
                 fold_data.append(values)
-            else:
-                fold_data.append([])
+                valid_model_names.append(model_name)
         
-        # Filter out empty lists and corresponding model names
-        valid_data = [(data, name) for data, name in zip(fold_data, model_names) if len(data) > 0]
-        if valid_data:
-            valid_fold_data, valid_model_names = zip(*valid_data)
+        if fold_data:
             # Create box plot
-            bp = ax.boxplot(valid_fold_data, labels=valid_model_names, patch_artist=True)
+            bp = ax.boxplot(fold_data, labels=valid_model_names, patch_artist=True)
             ax.set_title(label)
             ax.set_ylabel('Score')
             ax.grid(True, alpha=0.3)
@@ -142,6 +159,7 @@ def plot_cv_results_full(results: Dict, output_file: str = None):
     if output_file:
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
         print(f"Saved plot to {output_file}")
+        plt.close()
     else:
         plt.show()
 
@@ -162,7 +180,16 @@ def plot_model_comparison_full(results: Dict, output_file: str = None):
     model_names = [m for m in model_names if 'mean_precision_full' in results[m]]
     
     if len(model_names) == 0:
-        print("No full evaluation metrics found in results.")
+        print("Warning: No full evaluation metrics found in results. Skipping full metrics comparison plot.")
+        if output_file:
+            # Create empty plot with message
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.text(0.5, 0.5, 'No data available\n(Run training with updated code)', 
+                   ha='center', va='center', transform=ax.transAxes, fontsize=12)
+            ax.set_title('Model Comparison - Full Evaluation Metrics (All Species People See)')
+            plt.tight_layout()
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.close()
         return
     
     x = np.arange(len(model_names))
@@ -195,6 +222,7 @@ def plot_model_comparison_full(results: Dict, output_file: str = None):
     if output_file:
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
         print(f"Saved plot to {output_file}")
+        plt.close()
     else:
         plt.show()
 
