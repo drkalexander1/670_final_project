@@ -48,10 +48,15 @@ model_params = {
         'alpha': 0.1,  # Smoothing parameter for co-occurrence scores
         'min_cooccurrence': 2  # Minimum co-occurrences to consider
     },
+    'user_collaborative': {
+        'similarity_metric': 'cosine',  # 'cosine' or 'jaccard'
+        'n_similar_users': 50,  # Number of similar birders to consider
+        'min_common_species': 1  # Minimum common species for similarity
+    },
     'neural': {
         'embedding_dim': 64,
-        'hidden_dims': [128, 64],
-        'dropout': 0.3,
+        'hidden_dims': [256, 128, 64],  # Deeper network
+        'dropout': 0.2,  # Reduced from 0.3
         'predict_count': True  # Enable count prediction (multi-task learning)
     }
 }
@@ -63,7 +68,7 @@ print("="*60)
 sys.stdout.flush()
 results_no_features = train_and_evaluate_cv(
     transitions,
-    model_types=['baseline', 'collaborative', 'neural'],
+    model_types=['baseline', 'collaborative', 'user_collaborative', 'neural'],
     model_params=model_params,
     use_features=False
 )
@@ -88,7 +93,7 @@ def load_birder_species_data(year: int):
 
 results_with_features = train_and_evaluate_cv(
     transitions,
-    model_types=['collaborative', 'neural'],  # Skip baseline (doesn't use features)
+    model_types=['collaborative', 'user_collaborative', 'neural'],  # Skip baseline (doesn't use features)
     model_params=model_params,
     raw_data=None,  # Don't pre-load all data
     use_features=True,

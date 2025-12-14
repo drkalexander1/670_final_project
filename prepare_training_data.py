@@ -5,7 +5,7 @@ Creates train/test splits for year-over-year transitions.
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Set, Optional
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler
 from feature_engineering import (
     create_birder_species_matrix, 
     get_all_species,
@@ -204,16 +204,24 @@ def prepare_cv_fold_data(cv_split: Dict, all_species: Set[str],
                     train_features = np.zeros((train_X.shape[0], n_temporal_features + n_geo_features), dtype=np.float32)
                     birder_year_map = {}
                     for idx, (_, row) in enumerate(cv_split['train'].iterrows()):
-                        birder_year_map[(row['observer_id'], row['year_from'])] = idx
+                        # Convert to Python native types to ensure hashability
+                        obs_id = int(row['observer_id']) if pd.notna(row['observer_id']) else None
+                        year = int(row['year_from']) if pd.notna(row['year_from']) else None
+                        if obs_id is not None and year is not None:
+                            birder_year_map[(obs_id, year)] = idx
                     
                     # Fill temporal features
                     for _, feat_row in train_temporal.iterrows():
-                        key = (feat_row['observer_id'], feat_row['year_from'])
-                        if key in birder_year_map:
-                            feat_idx = birder_year_map[key]
-                            for col_idx, col in enumerate(available_cols):
-                                val = feat_row[col]
-                                train_features[feat_idx, col_idx] = val if not pd.isna(val) else 0.0
+                        # Convert to Python native types
+                        obs_id = int(feat_row['observer_id']) if pd.notna(feat_row['observer_id']) else None
+                        year = int(feat_row['year_from']) if pd.notna(feat_row['year_from']) else None
+                        if obs_id is not None and year is not None:
+                            key = (obs_id, year)
+                            if key in birder_year_map:
+                                feat_idx = birder_year_map[key]
+                                for col_idx, col in enumerate(available_cols):
+                                    val = feat_row[col]
+                                    train_features[feat_idx, col_idx] = val if not pd.isna(val) else 0.0
                     
                     # Fill geographic features
                     train_features[:, n_temporal_features:] = train_geo
@@ -225,16 +233,24 @@ def prepare_cv_fold_data(cv_split: Dict, all_species: Set[str],
                     test_features = np.zeros((test_X.shape[0], n_temporal_features + n_geo_features), dtype=np.float32)
                     birder_year_map = {}
                     for idx, (_, row) in enumerate(cv_split['test'].iterrows()):
-                        birder_year_map[(row['observer_id'], row['year_from'])] = idx
+                        # Convert to Python native types to ensure hashability
+                        obs_id = int(row['observer_id']) if pd.notna(row['observer_id']) else None
+                        year = int(row['year_from']) if pd.notna(row['year_from']) else None
+                        if obs_id is not None and year is not None:
+                            birder_year_map[(obs_id, year)] = idx
                     
                     # Fill temporal features
                     for _, feat_row in test_temporal.iterrows():
-                        key = (feat_row['observer_id'], feat_row['year_from'])
-                        if key in birder_year_map:
-                            feat_idx = birder_year_map[key]
-                            for col_idx, col in enumerate(available_cols):
-                                val = feat_row[col]
-                                test_features[feat_idx, col_idx] = val if not pd.isna(val) else 0.0
+                        # Convert to Python native types
+                        obs_id = int(feat_row['observer_id']) if pd.notna(feat_row['observer_id']) else None
+                        year = int(feat_row['year_from']) if pd.notna(feat_row['year_from']) else None
+                        if obs_id is not None and year is not None:
+                            key = (obs_id, year)
+                            if key in birder_year_map:
+                                feat_idx = birder_year_map[key]
+                                for col_idx, col in enumerate(available_cols):
+                                    val = feat_row[col]
+                                    test_features[feat_idx, col_idx] = val if not pd.isna(val) else 0.0
                     
                     # Fill geographic features
                     test_features[:, n_temporal_features:] = test_geo
@@ -242,7 +258,7 @@ def prepare_cv_fold_data(cv_split: Dict, all_species: Set[str],
                 # Normalize features: fit scaler on train, transform both train and test
                 # Note: Don't normalize dummy variables (state/county one-hot) but normalize geographic metrics
                 if train_features is not None and len(train_features) > 0:
-                    scaler = StandardScaler()
+                    scaler = RobustScaler()  # More robust to outliers
                     n_temporal_features = len(available_cols)
                     
                     # Determine which geographic features are dummy variables vs metrics
@@ -262,7 +278,7 @@ def prepare_cv_fold_data(cv_split: Dict, all_species: Set[str],
                     geo_metrics_end = geo_metrics_start + n_geo_metrics
                     
                     if n_geo_metrics > 0:
-                        geo_scaler = StandardScaler()
+                        geo_scaler = RobustScaler()  # More robust to outliers
                         train_geo_metrics = train_features[:, geo_metrics_start:geo_metrics_end]
                         train_geo_metrics_scaled = geo_scaler.fit_transform(train_geo_metrics).astype(np.float32)
                         
@@ -314,7 +330,7 @@ def prepare_cv_fold_data(cv_split: Dict, all_species: Set[str],
                 
                 # Normalize simplified features: fit on train, transform both
                 if train_features is not None and len(train_features) > 0:
-                    scaler = StandardScaler()
+                    scaler = RobustScaler()  # More robust to outliers
                     train_features = scaler.fit_transform(train_features).astype(np.float32)
                     if test_features is not None and len(test_features) > 0:
                         test_features = scaler.transform(test_features).astype(np.float32)

@@ -5,7 +5,7 @@ Implements time-series cross-validation.
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional
-from models import create_model, NeuralNetworkModel, SpeciesCooccurrenceModel, BaselinePopularityModel
+from models import create_model, NeuralNetworkModel, SpeciesCooccurrenceModel, BaselinePopularityModel, UserToUserCollaborativeModel
 from prepare_training_data import prepare_all_cv_data
 import json
 import os
@@ -200,6 +200,10 @@ def evaluate_model(model, fold_data: Dict, top_k: int = 10) -> Dict:
         idx_to_species = fold_data.get('idx_to_species')
         y_pred_binary = model.predict(fold_data['test_X'], top_k=top_k,
                                      idx_to_species=idx_to_species)
+    elif isinstance(model, UserToUserCollaborativeModel):
+        idx_to_species = fold_data.get('idx_to_species')
+        y_pred_binary = model.predict(fold_data['test_X'], top_k=top_k,
+                                     idx_to_species=idx_to_species)
     else:
         y_pred_binary = model.predict(fold_data['test_X'], top_k=top_k)
     y_true = fold_data['test_y']
@@ -249,8 +253,9 @@ def evaluate_model(model, fold_data: Dict, top_k: int = 10) -> Dict:
                     )
         
         # Fallback to species count if bird count not available
+        # Note: This is less accurate but necessary when raw_data is not available
         if actual_bird_counts is None:
-            actual_bird_counts = None  # Will use default in evaluate_count_predictions
+            actual_bird_counts = None  # Will use default in evaluate_count_predictions (species count)
         
         count_metrics = evaluate_count_predictions(y_true, predicted_counts, actual_counts=actual_bird_counts)
         metrics.update(count_metrics)
@@ -369,7 +374,32 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
                 if fold_idx == 1:
                     print("  Training...")
                     sys.stdout.flush()
-                    model.fit(fold_data['train_X'], fold_data['train_y'])
+                    # Extract total bird counts for baseline (if available)
+                    train_bird_counts = None
+                    fold_raw_data = fold_data.get('raw_data')
+                    if fold_raw_data is not None:
+                        train_transitions_df = fold_data.get('train_transitions_df')
+                        if train_transitions_df is not None:
+                            # Extract bird counts for each row in train_transitions_df
+                            all_train_counts = []
+                            for _, row in train_transitions_df.iterrows():
+                                year_to_train = int(row['year_to'])
+                                # Extract count for this specific birder-year pair
+                                counts = extract_bird_counts(
+                                    pd.DataFrame([row]), 
+                                    fold_raw_data, 
+                                    year_to_train
+                                )
+                                if counts is not None and len(counts) > 0:
+                                    all_train_counts.append(counts[0])
+                                else:
+                                    all_train_counts.append(0.0)
+                            
+                            if len(all_train_counts) == fold_data['train_X'].shape[0]:
+                                train_bird_counts = np.array(all_train_counts, dtype=np.float32)
+                    
+                    # Fit baseline with bird counts if available
+                    model.fit(fold_data['train_X'], fold_data['train_y'], bird_counts=train_bird_counts)
                 else:
                     # Skip fitting for subsequent folds (naive baseline doesn't update)
                     print("  Skipping training (naive baseline uses fixed popular species from fold 1)...")
@@ -520,7 +550,7 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
                         training_history = model.fit(X_train, y_train, X_features=X_train_features,
                                                      y_bird_count=train_bird_counts,
                                                      validation_data=(X_val, X_val_features, y_val, val_bird_counts),
-                                                     epochs=20, batch_size=256, verbose=0)
+                                                     epochs=50, batch_size=128, verbose=0)
                     else:
                         # Debug: Check shapes right before fit
                         print(f"  DEBUG train.py (with features, no counts): y_train.shape={y_train.shape}, y_train.ndim={y_train.ndim}, y_val.shape={y_val.shape}, y_val.ndim={y_val.ndim}")
@@ -530,7 +560,7 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
                             raise ValueError(f"y_val is not 2D right before model.fit(): shape={y_val.shape}")
                         training_history = model.fit(X_train, y_train, X_features=X_train_features,
                                                      validation_data=(X_val, X_val_features, y_val),
-                                                     epochs=20, batch_size=256, verbose=0)
+                                                     epochs=50, batch_size=128, verbose=0)
                 else:
                     if train_bird_counts is not None:
                         # Debug: Check shapes right before fit
@@ -542,10 +572,10 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
                         # Pass 4 elements: (X_val, None, y_val, val_bird_counts) when no features but have bird counts
                         training_history = model.fit(X_train, y_train, y_bird_count=train_bird_counts,
                                                      validation_data=(X_val, None, y_val, val_bird_counts),
-                                                     epochs=20, batch_size=256, verbose=0)
+                                                     epochs=50, batch_size=128, verbose=0)
                     else:
                         training_history = model.fit(X_train, y_train, validation_data=(X_val, y_val),
-                                                     epochs=20, batch_size=256, verbose=0)
+                                                     epochs=50, batch_size=128, verbose=0)
             elif model_type != 'baseline':  # Baseline already handled above
                 model.fit(fold_data['train_X'], fold_data['train_y'])
             

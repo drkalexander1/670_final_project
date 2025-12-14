@@ -13,13 +13,13 @@ class BaselinePopularityModel:
     """
     Baseline model: predicts most popular species overall.
     Naive baseline: uses fixed popular species, doesn't update across folds.
-    Also provides naive count prediction (mean count).
+    Also provides naive count prediction (mean total bird count).
     """
     def __init__(self):
         self.popular_species = None
-        self.mean_count = None  # For naive count prediction
+        self.mean_count = None  # For naive count prediction (total bird count, not species count)
     
-    def fit(self, X: np.ndarray, y: np.ndarray):
+    def fit(self, X: np.ndarray, y: np.ndarray, bird_counts: Optional[np.ndarray] = None):
         """
         Learn most popular species from training data.
         For naive baseline: only update if not already set.
@@ -27,6 +27,8 @@ class BaselinePopularityModel:
         Args:
             X: Training input (birder-species matrix)
             y: Training targets (birder-species matrix for next year)
+            bird_counts: Optional array of total bird counts per birder (not species counts).
+                        If provided, uses this for count prediction. If None, falls back to species count.
         """
         # Naive baseline: only set popular_species if not already set
         # This prevents updating across folds
@@ -38,8 +40,13 @@ class BaselinePopularityModel:
         
         # Learn mean count for naive count prediction (only if not set)
         if self.mean_count is None:
-            # Calculate mean number of species per birder
-            self.mean_count = np.mean(np.sum(y, axis=1))
+            if bird_counts is not None and len(bird_counts) > 0:
+                # Use total bird counts if available (preferred)
+                self.mean_count = np.mean(bird_counts.astype(np.float32))
+            else:
+                # Fallback to species count (less accurate, but better than nothing)
+                # This will be used when raw_data is not available
+                self.mean_count = np.mean(np.sum(y, axis=1))
     
     def predict(self, X: np.ndarray, top_k: int = 10) -> np.ndarray:
         """
@@ -191,15 +198,22 @@ class SpeciesCooccurrenceModel:
             viewed_species = np.where(birder_species > 0)[0]
             
             if len(viewed_species) > 0:
-                # Aggregate co-occurrence scores from all viewed species
+                # IMPROVEMENT: Weighted aggregation (TF-IDF style)
                 species_scores = np.zeros(self.n_species, dtype=np.float32)
+                total_weight = 0.0
                 
                 for species_idx in viewed_species:
-                    # Add co-occurrence probabilities from this species
-                    species_scores += self.cooccurrence_matrix[species_idx, :]
+                    # Weight by inverse frequency
+                    species_freq = self.species_popularity[species_idx] if self.species_popularity is not None else 1.0
+                    weight = 1.0 / (1.0 + species_freq * 10.0)
+                    species_scores += weight * self.cooccurrence_matrix[species_idx, :]
+                    total_weight += weight
                 
-                # Average across viewed species
-                species_scores = species_scores / len(viewed_species)
+                # Normalize by sum of weights
+                if total_weight > 0:
+                    species_scores = species_scores / total_weight
+                else:
+                    species_scores = species_scores / len(viewed_species)
             else:
                 # No history: use popularity as fallback
                 species_scores = self.species_popularity.copy()
@@ -215,6 +229,203 @@ class SpeciesCooccurrenceModel:
             
             # Exclude already viewed species
             species_scores[birder_species > 0] = -np.inf
+            
+            # Get top K
+            top_k_indices = np.argsort(species_scores)[::-1][:top_k]
+            predictions[i, top_k_indices] = 1.0
+        
+        return predictions
+
+
+class UserToUserCollaborativeModel:
+    """
+    User-to-user collaborative filtering model.
+    Finds similar birders and recommends species based on what similar birders saw.
+    """
+    def __init__(self, similarity_metric: str = 'cosine', n_similar_users: int = 50,
+                 min_common_species: int = 1, species_features: Optional[Dict] = None):
+        """
+        Args:
+            similarity_metric: 'cosine' or 'jaccard' for computing birder similarity
+            n_similar_users: Number of similar birders to consider for recommendations
+            min_common_species: Minimum number of common species to consider two birders similar
+            species_features: Optional dictionary mapping species to features (popularity, etc.)
+        """
+        self.similarity_metric = similarity_metric
+        self.n_similar_users = n_similar_users
+        self.min_common_species = min_common_species
+        self.species_features = species_features
+        self.training_matrix = None  # Store training data for similarity computation
+        self.species_popularity = None
+        self.n_species = None
+        self.n_birders = None
+    
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        """
+        Learn birder similarity patterns from training data.
+        
+        Args:
+            X: Training input (birder-species matrix)
+            y: Training targets (birder-species matrix for next year)
+        """
+        import sys
+        
+        # Combine X and y to get full birder-species history
+        # Use binary: did birder see species?
+        combined = (X + y) > 0
+        self.n_species = combined.shape[1]
+        self.n_birders = combined.shape[0]
+        
+        # Store training matrix for prediction (we'll compute similarities on-the-fly)
+        self.training_matrix = combined.astype(np.float32)
+        
+        print(f"  Building user-to-user collaborative model for {self.n_birders:,} birders and {self.n_species} species...")
+        print(f"    Using {self.similarity_metric} similarity with top {self.n_similar_users} similar users")
+        sys.stdout.flush()
+        
+        # Compute species popularity (for fallback)
+        self.species_popularity = combined.sum(axis=0).astype(np.float32)
+        if self.species_popularity.sum() > 0:
+            self.species_popularity = self.species_popularity / self.species_popularity.sum()
+        else:
+            self.species_popularity = np.ones(self.n_species) / self.n_species
+        
+        print(f"  User-to-user model ready!")
+        sys.stdout.flush()
+    
+    def predict(self, X: np.ndarray, top_k: int = 10,
+                idx_to_species: Optional[Dict[int, str]] = None) -> np.ndarray:
+        """
+        Predict species for each birder based on similar birders.
+        
+        Args:
+            X: Input matrix (birder-species) - current year observations
+            top_k: Number of top species to predict
+            idx_to_species: Optional mapping from species index to name (for species features)
+        
+        Returns:
+            Binary matrix with top K species marked
+        """
+        if self.training_matrix is None:
+            raise ValueError("Model must be fitted first")
+        
+        n_birders = X.shape[0]
+        predictions = np.zeros((n_birders, self.n_species), dtype=np.float32)
+        
+        # For each test birder, find similar training birders
+        for i in range(n_birders):
+            birder_species = X[i] > 0  # Binary: which species did this birder see?
+            
+            # Compute similarity to all training birders
+            birder_vector = birder_species.astype(np.float32)
+            
+            if self.similarity_metric == 'cosine':
+                # Cosine similarity: dot product of normalized vectors
+                # Normalize birder vector
+                birder_norm = np.linalg.norm(birder_vector)
+                if birder_norm == 0:
+                    # No species viewed: use popularity fallback
+                    species_scores = self.species_popularity.copy()
+                else:
+                    birder_normalized = birder_vector / birder_norm
+                    
+                    # Compute dot products with training birders (normalized)
+                    # training_matrix is already binary, normalize each row
+                    training_norms = np.linalg.norm(self.training_matrix, axis=1, keepdims=True)
+                    training_norms[training_norms == 0] = 1  # Avoid division by zero
+                    training_normalized = self.training_matrix / training_norms
+                    
+                    # Cosine similarity = dot product of normalized vectors
+                    similarities = np.dot(training_normalized, birder_normalized)
+                    
+                    # Filter by minimum common species
+                    common_species_counts = np.sum((birder_species & (self.training_matrix > 0)), axis=1)
+                    valid_similarities = similarities.copy()
+                    valid_similarities[common_species_counts < self.min_common_species] = -1
+                    
+                    # Get top N similar birders
+                    top_similar_indices = np.argsort(valid_similarities)[::-1][:self.n_similar_users]
+                    top_similarities = valid_similarities[top_similar_indices]
+                    
+                    # Filter out negative similarities (no common species)
+                    valid_mask = top_similarities > 0
+                    if np.sum(valid_mask) == 0:
+                        # No similar birders: use popularity fallback
+                        species_scores = self.species_popularity.copy()
+                    else:
+                        top_similar_indices = top_similar_indices[valid_mask]
+                        top_similarities = top_similarities[valid_mask]
+                        
+                        # Aggregate species preferences from similar birders
+                        # Weight by similarity
+                        species_scores = np.zeros(self.n_species, dtype=np.float32)
+                        
+                        for similar_idx, similarity in zip(top_similar_indices, top_similarities):
+                            # Get species that similar birder saw (from training data)
+                            similar_birder_species = self.training_matrix[similar_idx] > 0
+                            # Weight by similarity
+                            species_scores += similarity * similar_birder_species.astype(np.float32)
+                        
+                        # Normalize by sum of similarities
+                        total_similarity = np.sum(top_similarities)
+                        if total_similarity > 0:
+                            species_scores = species_scores / total_similarity
+                        else:
+                            species_scores = self.species_popularity.copy()
+            
+            else:  # jaccard similarity
+                # Jaccard similarity: intersection over union
+                similarities = np.zeros(self.n_birders, dtype=np.float32)
+                
+                birder_set = set(np.where(birder_species)[0])
+                if len(birder_set) == 0:
+                    # No species viewed: use popularity fallback
+                    species_scores = self.species_popularity.copy()
+                else:
+                    for j in range(self.n_birders):
+                        training_birder_set = set(np.where(self.training_matrix[j] > 0)[0])
+                        intersection = len(birder_set & training_birder_set)
+                        union = len(birder_set | training_birder_set)
+                        if union > 0 and intersection >= self.min_common_species:
+                            similarities[j] = intersection / union
+                    
+                    # Get top N similar birders
+                    top_similar_indices = np.argsort(similarities)[::-1][:self.n_similar_users]
+                    top_similarities = similarities[top_similar_indices]
+                    
+                    # Filter out zero similarities
+                    valid_mask = top_similarities > 0
+                    if np.sum(valid_mask) == 0:
+                        # No similar birders: use popularity fallback
+                        species_scores = self.species_popularity.copy()
+                    else:
+                        top_similar_indices = top_similar_indices[valid_mask]
+                        top_similarities = top_similarities[valid_mask]
+                        
+                        # Aggregate species preferences from similar birders
+                        species_scores = np.zeros(self.n_species, dtype=np.float32)
+                        
+                        for similar_idx, similarity in zip(top_similar_indices, top_similarities):
+                            similar_birder_species = self.training_matrix[similar_idx] > 0
+                            species_scores += similarity * similar_birder_species.astype(np.float32)
+                        
+                        # Normalize by sum of similarities
+                        total_similarity = np.sum(top_similarities)
+                        if total_similarity > 0:
+                            species_scores = species_scores / total_similarity
+                        else:
+                            species_scores = self.species_popularity.copy()
+            
+            # Apply species popularity weighting if available
+            if self.species_features is not None and idx_to_species is not None:
+                for species_idx in range(len(species_scores)):
+                    species_name = idx_to_species.get(species_idx)
+                    if species_name and species_name in self.species_features:
+                        popularity_score = self.species_features[species_name].get('popularity_score', 1.0)
+                        species_scores[species_idx] *= (1.0 + 0.2 * popularity_score)
+            
+            # Exclude already viewed species
+            species_scores[birder_species] = -np.inf
             
             # Get top K
             top_k_indices = np.argsort(species_scores)[::-1][:top_k]
@@ -255,31 +466,40 @@ class NeuralNetworkModel:
         # Input: birder-species interaction vector
         species_input = layers.Input(shape=(self.n_species,), name='birder_species_input')
         
-        # Birder embedding (learned from species interactions)
-        birder_embedding = layers.Dense(self.embedding_dim, activation='relu', name='birder_embedding')(species_input)
-        birder_embedding = layers.Dropout(0.3)(birder_embedding)
+        # IMPROVEMENT: BatchNormalization for sparse inputs
+        x = layers.BatchNormalization()(species_input)
+        
+        # IMPROVEMENT: Deeper embedding with residual connection
+        embedding_1 = layers.Dense(self.embedding_dim * 2, activation='relu', name='embedding_1')(x)
+        embedding_1 = layers.BatchNormalization()(embedding_1)
+        embedding_1 = layers.Dropout(0.2)(embedding_1)  # Reduced dropout
+        embedding_2 = layers.Dense(self.embedding_dim, activation='relu', name='embedding_2')(embedding_1)
+        residual = layers.Dense(self.embedding_dim, activation='linear', name='residual_projection')(x)
+        birder_embedding = layers.Add(name='residual_add')([embedding_2, residual])
+        birder_embedding = layers.BatchNormalization()(birder_embedding)
+        birder_embedding = layers.Dropout(0.2)(birder_embedding)
         
         # Additional features input (if available)
         if self.n_additional_features > 0:
             features_input = layers.Input(shape=(self.n_additional_features,), name='temporal_features_input')
-            # Process features with larger embedding to match birder embedding capacity
-            features_processed = layers.Dense(self.embedding_dim, activation='relu', name='features_embedding')(features_input)
-            features_processed = layers.Dropout(self.dropout)(features_processed)
-            # Add another layer for feature refinement
-            features_refined = layers.Dense(self.embedding_dim // 2, activation='relu', name='features_refined')(features_processed)
-            features_refined = layers.Dropout(self.dropout)(features_refined)
-            # Concatenate with birder embedding
-            x = layers.Concatenate()([birder_embedding, features_refined])
+            # IMPROVEMENT: Normalize features with BatchNormalization
+            features_norm = layers.BatchNormalization()(features_input)
+            features_processed = layers.Dense(self.embedding_dim, activation='relu', name='features_embedding')(features_norm)
+            features_processed = layers.BatchNormalization()(features_processed)
+            features_processed = layers.Dropout(0.2)(features_processed)  # Reduced dropout
+            x = layers.Concatenate()([birder_embedding, features_processed])
         else:
             x = birder_embedding
         
-        # Hidden layers
+        # IMPROVEMENT: Hidden layers with BatchNormalization
         for dim in self.hidden_dims:
             x = layers.Dense(dim, activation='relu')(x)
-            x = layers.Dropout(self.dropout)(x)
+            x = layers.BatchNormalization()(x)
+            x = layers.Dropout(0.2)(x)  # Reduced dropout
         
-        # Output: predicted species probabilities
-        species_output = layers.Dense(self.n_species, activation='sigmoid', name='species_predictions')(x)
+        # IMPROVEMENT: Use linear output with sigmoid activation
+        species_logits = layers.Dense(self.n_species, activation='linear', name='species_logits')(x)
+        species_output = layers.Activation('sigmoid', name='species_predictions')(species_logits)
         
         # Multi-task: Also predict count of species
         outputs = [species_output]
@@ -293,19 +513,28 @@ class NeuralNetworkModel:
         else:
             model = keras.Model(inputs=species_input, outputs=outputs)
         
-        # Compile with appropriate losses
+        # IMPROVEMENT: Lower learning rate with cosine decay schedule
+        initial_lr = 0.0005  # Reduced from 0.001
+        lr_schedule = keras.optimizers.schedules.CosineDecay(
+            initial_learning_rate=initial_lr,
+            decay_steps=1000,
+            alpha=0.01
+        )
+        
+        # IMPROVEMENT: Add label smoothing and reduce count prediction weight
         if self.predict_count:
             model.compile(
-                optimizer=keras.optimizers.Adam(learning_rate=0.001),
-                loss={'species_predictions': 'binary_crossentropy', 'species_count': 'mse'},
-                loss_weights={'species_predictions': 1.0, 'species_count': 0.1},  # Weight count prediction lower
-                metrics={'species_predictions': ['accuracy', 'precision', 'recall'], 
+                optimizer=keras.optimizers.Adam(learning_rate=lr_schedule),
+                loss={'species_predictions': keras.losses.BinaryCrossentropy(label_smoothing=0.1),
+                      'species_count': 'mse'},
+                loss_weights={'species_predictions': 1.0, 'species_count': 0.05},  # Reduced from 0.1
+                metrics={'species_predictions': ['accuracy', 'precision', 'recall'],
                         'species_count': ['mae']}
             )
         else:
             model.compile(
-                optimizer=keras.optimizers.Adam(learning_rate=0.001),
-                loss='binary_crossentropy',
+                optimizer=keras.optimizers.Adam(learning_rate=lr_schedule),
+                loss=keras.losses.BinaryCrossentropy(label_smoothing=0.1),
                 metrics=['accuracy', 'precision', 'recall']
             )
         
@@ -485,10 +714,28 @@ class NeuralNetworkModel:
                 else:
                     val_data = validation_data
         
-        # Train
+        # IMPROVEMENT: Better callbacks with increased patience
         callbacks = [
-            keras.callbacks.EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True),
-            keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3)
+            keras.callbacks.EarlyStopping(
+                monitor='val_loss',
+                patience=15,  # Increased from 5
+                restore_best_weights=True,
+                min_delta=1e-5
+            ),
+            keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.5,
+                patience=7,  # Increased from 3
+                min_lr=1e-6,
+                verbose=1
+            ),
+            keras.callbacks.ModelCheckpoint(
+                'best_model_weights.h5',
+                monitor='val_loss',
+                save_best_only=True,
+                save_weights_only=True,
+                verbose=0
+            )
         ]
         
         # Debug: Check train_targets shape right before fit
@@ -584,7 +831,7 @@ def create_model(model_type: str, **kwargs) -> object:
     Factory function to create models.
     
     Args:
-        model_type: 'baseline', 'collaborative', or 'neural'
+        model_type: 'baseline', 'collaborative', 'user_collaborative', or 'neural'
         **kwargs: Model-specific parameters
     
     Returns:
@@ -596,6 +843,10 @@ def create_model(model_type: str, **kwargs) -> object:
         # Extract species_features if provided
         species_features = kwargs.pop('species_features', None)
         return SpeciesCooccurrenceModel(species_features=species_features, **kwargs)
+    elif model_type == 'user_collaborative':
+        # Extract species_features if provided
+        species_features = kwargs.pop('species_features', None)
+        return UserToUserCollaborativeModel(species_features=species_features, **kwargs)
     elif model_type == 'neural':
         # Extract n_additional_features and predict_count if provided
         n_additional_features = kwargs.pop('n_additional_features', 0)

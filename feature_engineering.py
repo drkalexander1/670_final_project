@@ -535,9 +535,13 @@ def extract_temporal_features_from_birder_species(transitions_df: pd.DataFrame,
     features = []
     
     for _, row in transitions_df.iterrows():
-        observer_id = row['observer_id']
+        # Convert to Python native types
+        observer_id = int(row['observer_id']) if pd.notna(row['observer_id']) else None
         year_from = int(row['year_from'])
         year_to = int(row['year_to'])
+        
+        if observer_id is None:
+            continue
         
         # Get birder_species data for year_from
         if year_from in birder_species_data:
@@ -561,6 +565,16 @@ def extract_temporal_features_from_birder_species(transitions_df: pd.DataFrame,
                 
                 # Use number of unique localities as proxy for checklists
                 locality_set = birder_row.get('locality_id', set())
+                # Handle numpy arrays and lists
+                if isinstance(locality_set, (np.ndarray, list)):
+                    locality_set = set(locality_set)
+                elif not isinstance(locality_set, set):
+                    # Single value - convert to set
+                    if pd.notna(locality_set):
+                        locality_set = {locality_set}
+                    else:
+                        locality_set = set()
+                
                 if isinstance(locality_set, set):
                     num_checklists = len(locality_set)  # Proxy: unique locations
                     feat_dict['num_checklists'] = num_checklists
@@ -611,10 +625,35 @@ def extract_temporal_features_from_birder_species(transitions_df: pd.DataFrame,
                 # Location diversity
                 locality_set = birder_row.get('locality_id', set())
                 state_set = birder_row.get('state', set())
+                # Handle numpy arrays and lists
+                if isinstance(locality_set, (np.ndarray, list)):
+                    # Convert to set with string values for hashability
+                    locality_set = {str(l) for l in locality_set}
+                elif isinstance(locality_set, set):
+                    # Convert set elements to strings for hashability
+                    locality_set = {str(l) for l in locality_set}
+                elif not isinstance(locality_set, set):
+                    # Single value - convert to set with string
+                    if pd.notna(locality_set):
+                        locality_set = {str(locality_set)}
+                    else:
+                        locality_set = set()
+                
                 if isinstance(locality_set, set):
                     feat_dict['num_locations'] = len(locality_set)
                 else:
                     feat_dict['num_locations'] = 0
+                
+                # Handle state_set similarly
+                if isinstance(state_set, (np.ndarray, list)):
+                    state_set = {str(s) for s in state_set}
+                elif isinstance(state_set, set):
+                    state_set = {str(s) for s in state_set}
+                elif not isinstance(state_set, set):
+                    if pd.notna(state_set):
+                        state_set = {str(state_set)}
+                    else:
+                        state_set = set()
                 
                 if isinstance(state_set, set):
                     feat_dict['num_states'] = len(state_set)
@@ -655,13 +694,29 @@ def extract_geographic_features_from_birder_species(transitions_df: pd.DataFrame
     
     for year, df in birder_species_data.items():
         if 'state' in df.columns:
-            for state_set in df['state'].dropna():
-                if isinstance(state_set, set):
-                    all_states.update(state_set)
+            for state_val in df['state'].dropna():
+                # Handle both sets and numpy arrays
+                if isinstance(state_val, set):
+                    # Convert set elements to Python native types (strings)
+                    all_states.update(str(s) for s in state_val)
+                elif isinstance(state_val, (np.ndarray, list)):
+                    # Convert numpy array or list to set, ensuring elements are hashable
+                    all_states.update(str(s) for s in state_val)
+                elif pd.notna(state_val):
+                    # Single value - convert to string to ensure hashability
+                    all_states.add(str(state_val))
         if 'county' in df.columns:
-            for county_set in df['county'].dropna():
-                if isinstance(county_set, set):
-                    all_counties.update(county_set)
+            for county_val in df['county'].dropna():
+                # Handle both sets and numpy arrays
+                if isinstance(county_val, set):
+                    # Convert set elements to Python native types (strings)
+                    all_counties.update(str(c) for c in county_val)
+                elif isinstance(county_val, (np.ndarray, list)):
+                    # Convert numpy array or list to set, ensuring elements are hashable
+                    all_counties.update(str(c) for c in county_val)
+                elif pd.notna(county_val):
+                    # Single value - convert to string to ensure hashability
+                    all_counties.add(str(county_val))
     
     # Create encoders
     state_list = sorted([s for s in all_states if pd.notna(s)])
@@ -681,8 +736,12 @@ def extract_geographic_features_from_birder_species(transitions_df: pd.DataFrame
     geo_features = np.zeros((n_samples, n_total_features), dtype=np.float32)
     
     for idx, row in transitions_df.iterrows():
-        observer_id = row['observer_id']
+        # Convert to Python native types
+        observer_id = int(row['observer_id']) if pd.notna(row['observer_id']) else None
         year_from = int(row['year_from'])
+        
+        if observer_id is None:
+            continue
         
         if year_from in birder_species_data:
             df_year = birder_species_data[year_from]
@@ -693,11 +752,25 @@ def extract_geographic_features_from_birder_species(transitions_df: pd.DataFrame
                 
                 # 1. State dummy variables
                 state_set = birder_row.get('state', set())
+                # Handle numpy arrays and lists
+                if isinstance(state_set, (np.ndarray, list)):
+                    # Convert to set with string values for hashability
+                    state_set = {str(s) for s in state_set}
+                elif isinstance(state_set, set):
+                    # Convert set elements to strings for hashability
+                    state_set = {str(s) for s in state_set}
+                elif not isinstance(state_set, set):
+                    # Single value - convert to set with string
+                    if pd.notna(state_set):
+                        state_set = {str(state_set)}
+                    else:
+                        state_set = set()
+                
                 if isinstance(state_set, set) and len(state_set) > 0:
                     state_list_birder = list(state_set)
                     # Use first state (sets don't preserve frequency)
                     if state_list_birder:
-                        most_common_state = state_list_birder[0]
+                        most_common_state = str(state_list_birder[0])  # Ensure string
                         if most_common_state in state_to_idx:
                             geo_features[idx, state_to_idx[most_common_state]] = 1.0
                     
@@ -715,10 +788,24 @@ def extract_geographic_features_from_birder_species(transitions_df: pd.DataFrame
                 
                 # 2. County dummy variables
                 county_set = birder_row.get('county', set())
+                # Handle numpy arrays and lists
+                if isinstance(county_set, (np.ndarray, list)):
+                    # Convert to set with string values for hashability
+                    county_set = {str(c) for c in county_set}
+                elif isinstance(county_set, set):
+                    # Convert set elements to strings for hashability
+                    county_set = {str(c) for c in county_set}
+                elif not isinstance(county_set, set):
+                    # Single value - convert to set with string
+                    if pd.notna(county_set):
+                        county_set = {str(county_set)}
+                    else:
+                        county_set = set()
+                
                 if isinstance(county_set, set) and len(county_set) > 0:
                     county_list_birder = list(county_set)
                     if county_list_birder:
-                        most_common_county = county_list_birder[0]
+                        most_common_county = str(county_list_birder[0])  # Ensure string
                         if county_list and most_common_county in county_to_idx:
                             geo_features[idx, n_state_features + county_to_idx[most_common_county]] = 1.0
                     geo_features[idx, n_state_features + n_county_features + 2] = len(county_list_birder)
@@ -727,6 +814,20 @@ def extract_geographic_features_from_birder_species(transitions_df: pd.DataFrame
                 
                 # 3. Location diversity metrics
                 locality_set = birder_row.get('locality_id', set())
+                # Handle numpy arrays and lists
+                if isinstance(locality_set, (np.ndarray, list)):
+                    # Convert to set with string values for hashability
+                    locality_set = {str(l) for l in locality_set}
+                elif isinstance(locality_set, set):
+                    # Convert set elements to strings for hashability
+                    locality_set = {str(l) for l in locality_set}
+                elif not isinstance(locality_set, set):
+                    # Single value - convert to set with string
+                    if pd.notna(locality_set):
+                        locality_set = {str(locality_set)}
+                    else:
+                        locality_set = set()
+                
                 if isinstance(locality_set, set):
                     num_localities = len(locality_set)
                 else:
