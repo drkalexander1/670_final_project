@@ -118,6 +118,108 @@ def mean_average_precision(y_true: np.ndarray, y_pred: np.ndarray, k: int = 10) 
     return np.mean(aps) if aps else 0.0
 
 
+def precision_full(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """
+    Calculate Precision over all predicted species (not just top k).
+    Uses all positive predictions.
+    
+    Args:
+        y_true: True binary matrix (n_birders, n_species)
+        y_pred: Predicted binary matrix (n_birders, n_species)
+    
+    Returns:
+        Precision score over all predictions
+    """
+    n_birders = y_true.shape[0]
+    precisions = []
+    
+    for i in range(n_birders):
+        true_species = set(np.where(y_true[i] > 0)[0])
+        if len(true_species) == 0:
+            continue
+        
+        # Get all predicted species (where prediction > 0)
+        pred_species = set(np.where(y_pred[i] > 0)[0])
+        
+        if len(pred_species) > 0:
+            precision = len(true_species & pred_species) / len(pred_species)
+            precisions.append(precision)
+    
+    return np.mean(precisions) if precisions else 0.0
+
+
+def recall_full(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """
+    Calculate Recall over all true species (how many did we predict).
+    Uses k = number of species each person actually sees.
+    
+    Args:
+        y_true: True binary matrix (n_birders, n_species)
+        y_pred: Predicted binary matrix (n_birders, n_species)
+    
+    Returns:
+        Recall score over all true species
+    """
+    n_birders = y_true.shape[0]
+    recalls = []
+    
+    for i in range(n_birders):
+        true_species = set(np.where(y_true[i] > 0)[0])
+        if len(true_species) == 0:
+            continue
+        
+        # Use k = number of species this person actually sees
+        k = len(true_species)
+        pred_scores = y_pred[i]
+        top_k_indices = np.argsort(pred_scores)[::-1][:k]
+        pred_species = set(top_k_indices)
+        
+        recall = len(true_species & pred_species) / len(true_species)
+        recalls.append(recall)
+    
+    return np.mean(recalls) if recalls else 0.0
+
+
+def mean_average_precision_full(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """
+    Calculate MAP over all species each person sees (variable k per person).
+    
+    Args:
+        y_true: True binary matrix (n_birders, n_species)
+        y_pred: Predicted binary matrix (n_birders, n_species)
+    
+    Returns:
+        MAP score using k = number of species each person sees
+    """
+    n_birders = y_true.shape[0]
+    aps = []
+    
+    for i in range(n_birders):
+        true_species = set(np.where(y_true[i] > 0)[0])
+        if len(true_species) == 0:
+            continue
+        
+        # Use k = number of species this person actually sees
+        k = len(true_species)
+        pred_scores = y_pred[i]
+        top_k_indices = np.argsort(pred_scores)[::-1][:k]
+        
+        # Calculate average precision
+        relevant_count = 0
+        precision_sum = 0.0
+        
+        for rank, species_idx in enumerate(top_k_indices, 1):
+            if species_idx in true_species:
+                relevant_count += 1
+                precision_sum += relevant_count / rank
+        
+        if relevant_count > 0:
+            ap = precision_sum / min(len(true_species), k)
+            aps.append(ap)
+    
+    return np.mean(aps) if aps else 0.0
+
+
 def coverage(y_pred: np.ndarray) -> float:
     """
     Calculate coverage: fraction of species that are predicted for at least one birder.
@@ -213,7 +315,11 @@ def evaluate_model(model, fold_data: Dict, top_k: int = 10) -> Dict:
         'precision@k': precision_at_k(y_true, y_pred_binary, k=top_k),
         'recall@k': recall_at_k(y_true, y_pred_binary, k=top_k),
         'map@k': mean_average_precision(y_true, y_pred_binary, k=top_k),
-        'coverage': coverage(y_pred_binary)
+        'coverage': coverage(y_pred_binary),
+        # Full evaluation metrics over all species people see
+        'precision_full': precision_full(y_true, y_pred_binary),
+        'recall_full': recall_full(y_true, y_pred_binary),
+        'map_full': mean_average_precision_full(y_true, y_pred_binary)
     }
     
     # Evaluate count predictions if model supports it
@@ -587,7 +693,10 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
             # Evaluate
             print("  Evaluating...")
             sys.stdout.flush()
-            metrics = evaluate_model(model, fold_data, top_k=10)
+            # Use top_k=70 for baseline to match average number of species people see (~74)
+            # This makes full evaluation metrics fairer
+            eval_top_k = 70 if isinstance(model, BaselinePopularityModel) else 10
+            metrics = evaluate_model(model, fold_data, top_k=eval_top_k)
             metrics['fold'] = fold_idx
             
             # Add training history metrics if available
@@ -607,6 +716,10 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
             print(f"  Recall@10: {metrics['recall@k']:.4f}")
             print(f"  MAP@10: {metrics['map@k']:.4f}")
             print(f"  Coverage: {metrics['coverage']:.4f}")
+            print(f"  Full Evaluation:")
+            print(f"    Precision (full): {metrics['precision_full']:.4f}")
+            print(f"    Recall (full): {metrics['recall_full']:.4f}")
+            print(f"    MAP (full): {metrics['map_full']:.4f}")
             
             # Print count prediction metrics if available
             if 'count_mae' in metrics:
@@ -626,7 +739,11 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
             'mean_precision@k': np.mean([r['precision@k'] for r in fold_results]),
             'mean_recall@k': np.mean([r['recall@k'] for r in fold_results]),
             'mean_map@k': np.mean([r['map@k'] for r in fold_results]),
-            'mean_coverage': np.mean([r['coverage'] for r in fold_results])
+            'mean_coverage': np.mean([r['coverage'] for r in fold_results]),
+            # Full evaluation metrics
+            'mean_precision_full': np.mean([r['precision_full'] for r in fold_results]),
+            'mean_recall_full': np.mean([r['recall_full'] for r in fold_results]),
+            'mean_map_full': np.mean([r['map_full'] for r in fold_results])
         }
         
         # Aggregate count prediction metrics if available
@@ -642,6 +759,10 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
         print(f"  Mean Recall@10: {results[model_type]['mean_recall@k']:.4f}")
         print(f"  Mean MAP@10: {results[model_type]['mean_map@k']:.4f}")
         print(f"  Mean Coverage: {results[model_type]['mean_coverage']:.4f}")
+        print(f"  Full Evaluation (over all species people see):")
+        print(f"    Mean Precision (full): {results[model_type]['mean_precision_full']:.4f}")
+        print(f"    Mean Recall (full): {results[model_type]['mean_recall_full']:.4f}")
+        print(f"    Mean MAP (full): {results[model_type]['mean_map_full']:.4f}")
         
         # Print count prediction summary if available
         if 'mean_count_mae' in results[model_type]:

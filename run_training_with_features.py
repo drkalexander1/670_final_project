@@ -11,6 +11,8 @@ from evaluate import (
     plot_model_comparison, 
     plot_count_prediction_results,
     plot_count_prediction_comparison,
+    plot_cv_results_full,
+    plot_model_comparison_full,
     generate_summary_report
 )
 from data_loader import load_all_years
@@ -168,6 +170,18 @@ except Exception as e:
     print(f"  Warning: Could not create model_comparison_with_features.png: {e}")
 
 try:
+    plot_cv_results_full(results_with_features, output_file='results/cv_results_full_with_features.png')
+    print("  Saved: results/cv_results_full_with_features.png")
+except Exception as e:
+    print(f"  Warning: Could not create cv_results_full_with_features.png: {e}")
+
+try:
+    plot_model_comparison_full(results_with_features, output_file='results/model_comparison_full_with_features.png')
+    print("  Saved: results/model_comparison_full_with_features.png")
+except Exception as e:
+    print(f"  Warning: Could not create model_comparison_full_with_features.png: {e}")
+
+try:
     plot_count_prediction_results(results_with_features, output_file='results/count_prediction_results.png')
     print("  Saved: results/count_prediction_results.png")
 except Exception as e:
@@ -189,8 +203,10 @@ print("Training Complete!")
 print("="*60)
 print("\nResults saved:")
 print("  - results/evaluation_report_with_features.txt")
-print("  - results/cv_results_with_features.png")
-print("  - results/model_comparison_with_features.png")
+print("  - results/cv_results_with_features.png (Precision@10, Recall@10, MAP@10)")
+print("  - results/model_comparison_with_features.png (Precision@10, Recall@10, MAP@10)")
+print("  - results/cv_results_full_with_features.png (Full evaluation metrics)")
+print("  - results/model_comparison_full_with_features.png (Full evaluation metrics)")
 print("  - results/count_prediction_results.png")
 print("  - results/count_prediction_comparison.png")
 

@@ -92,6 +92,113 @@ def plot_model_comparison(results: Dict, output_file: str = None):
         plt.show()
 
 
+def plot_cv_results_full(results: Dict, output_file: str = None):
+    """
+    Plot cross-validation results across folds for full evaluation metrics.
+    
+    Args:
+        results: Dictionary with model results from train_and_evaluate_cv
+        output_file: Optional path to save figure
+    """
+    model_names = list(results.keys())
+    metrics = ['precision_full', 'recall_full', 'map_full']
+    metric_labels = ['Precision (Full)', 'Recall (Full)', 'MAP (Full)']
+    
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    for idx, (metric, label) in enumerate(zip(metrics, metric_labels)):
+        ax = axes[idx]
+        
+        # Extract fold results for each model
+        fold_data = []
+        for model_name in model_names:
+            fold_results = results[model_name]['fold_results']
+            values = [r.get(metric, 0) for r in fold_results if metric in r]
+            if values:  # Only add if metric exists
+                fold_data.append(values)
+            else:
+                fold_data.append([])
+        
+        # Filter out empty lists and corresponding model names
+        valid_data = [(data, name) for data, name in zip(fold_data, model_names) if len(data) > 0]
+        if valid_data:
+            valid_fold_data, valid_model_names = zip(*valid_data)
+            # Create box plot
+            bp = ax.boxplot(valid_fold_data, labels=valid_model_names, patch_artist=True)
+            ax.set_title(label)
+            ax.set_ylabel('Score')
+            ax.grid(True, alpha=0.3)
+            
+            # Color boxes
+            colors = ['lightblue', 'lightgreen', 'lightcoral', 'lightyellow', 'lightpink', 'lightgray']
+            for patch, color in zip(bp['boxes'], colors[:len(bp['boxes'])]):
+                patch.set_facecolor(color)
+        else:
+            ax.text(0.5, 0.5, 'No data available', ha='center', va='center', transform=ax.transAxes)
+            ax.set_title(label)
+    
+    plt.tight_layout()
+    
+    if output_file:
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f"Saved plot to {output_file}")
+    else:
+        plt.show()
+
+
+def plot_model_comparison_full(results: Dict, output_file: str = None):
+    """
+    Create bar chart comparing mean full evaluation metrics across models.
+    
+    Args:
+        results: Dictionary with model results
+        output_file: Optional path to save figure
+    """
+    model_names = list(results.keys())
+    metrics = ['mean_precision_full', 'mean_recall_full', 'mean_map_full']
+    metric_labels = ['Precision (Full)', 'Recall (Full)', 'MAP (Full)']
+    
+    # Filter to only models that have full metrics
+    model_names = [m for m in model_names if 'mean_precision_full' in results[m]]
+    
+    if len(model_names) == 0:
+        print("No full evaluation metrics found in results.")
+        return
+    
+    x = np.arange(len(model_names))
+    width = 0.25
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    for i, (metric, label) in enumerate(zip(metrics, metric_labels)):
+        values = [results[model].get(metric, 0) for model in model_names]
+        offset = (i - len(metrics)/2) * width + width/2
+        bars = ax.bar(x + offset, values, width, label=label)
+        
+        # Add value labels on bars
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height,
+                   f'{height:.3f}',
+                   ha='center', va='bottom', fontsize=9)
+    
+    ax.set_xlabel('Model')
+    ax.set_ylabel('Score')
+    ax.set_title('Model Comparison - Full Evaluation Metrics (All Species People See)')
+    ax.set_xticks(x)
+    ax.set_xticklabels(model_names)
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    plt.tight_layout()
+    
+    if output_file:
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f"Saved plot to {output_file}")
+    else:
+        plt.show()
+
+
 def plot_count_prediction_results(results: Dict, output_file: str = None):
     """
     Plot regression metrics for count prediction (MAE, RMSE, Correlation).
@@ -365,6 +472,10 @@ def generate_summary_report(results: Dict, output_file: str = None) -> str:
         report.append(f"Mean Precision@10: {model_results['mean_precision@k']:.4f}")
         report.append(f"Mean Recall@10: {model_results['mean_recall@k']:.4f}")
         report.append(f"Mean MAP@10: {model_results['mean_map@k']:.4f}")
+        report.append(f"Full Evaluation (over all species people see):")
+        report.append(f"  Mean Precision (full): {model_results.get('mean_precision_full', 0):.4f}")
+        report.append(f"  Mean Recall (full): {model_results.get('mean_recall_full', 0):.4f}")
+        report.append(f"  Mean MAP (full): {model_results.get('mean_map_full', 0):.4f}")
         report.append(f"Mean Coverage: {model_results['mean_coverage']:.4f}")
         
         # Add count prediction metrics if available
@@ -382,9 +493,13 @@ def generate_summary_report(results: Dict, output_file: str = None) -> str:
         report.append("Fold-by-fold results:")
         for fold_result in model_results['fold_results']:
             fold_line = f"  Fold {fold_result['fold']}: "
-            fold_line += f"P@{fold_result['precision@k']:.4f}, "
-            fold_line += f"R@{fold_result['recall@k']:.4f}, "
-            fold_line += f"MAP@{fold_result['map@k']:.4f}"
+            fold_line += f"P@10={fold_result['precision@k']:.4f}, "
+            fold_line += f"R@10={fold_result['recall@k']:.4f}, "
+            fold_line += f"MAP@10={fold_result['map@k']:.4f}"
+            if 'precision_full' in fold_result:
+                fold_line += f" | P_full={fold_result['precision_full']:.4f}, "
+                fold_line += f"R_full={fold_result['recall_full']:.4f}, "
+                fold_line += f"MAP_full={fold_result['map_full']:.4f}"
             
             # Add count metrics if available
             if 'count_mae' in fold_result:

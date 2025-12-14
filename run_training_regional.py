@@ -11,6 +11,8 @@ from evaluate import (
     plot_model_comparison, 
     plot_count_prediction_results,
     plot_count_prediction_comparison,
+    plot_cv_results_full,
+    plot_model_comparison_full,
     generate_summary_report
 )
 import os
@@ -177,6 +179,18 @@ except Exception as e:
     print(f"  Warning: Could not create model_comparison_regional.png: {e}")
 
 try:
+    plot_cv_results_full(results_with_features, output_file='results/cv_results_full_regional.png')
+    print("  Saved: results/cv_results_full_regional.png")
+except Exception as e:
+    print(f"  Warning: Could not create cv_results_full_regional.png: {e}")
+
+try:
+    plot_model_comparison_full(results_with_features, output_file='results/model_comparison_full_regional.png')
+    print("  Saved: results/model_comparison_full_regional.png")
+except Exception as e:
+    print(f"  Warning: Could not create model_comparison_full_regional.png: {e}")
+
+try:
     plot_count_prediction_results(results_with_features, output_file='results/count_prediction_regional.png')
     print("  Saved: results/count_prediction_regional.png")
 except Exception as e:
@@ -198,8 +212,10 @@ print("Regional Training Complete!")
 print("="*60)
 print("\nResults saved:")
 print("  - results/evaluation_report_regional.txt")
-print("  - results/cv_results_regional.png")
-print("  - results/model_comparison_regional.png")
+print("  - results/cv_results_regional.png (Precision@10, Recall@10, MAP@10)")
+print("  - results/model_comparison_regional.png (Precision@10, Recall@10, MAP@10)")
+print("  - results/cv_results_full_regional.png (Full evaluation metrics)")
+print("  - results/model_comparison_full_regional.png (Full evaluation metrics)")
 print("  - results/count_prediction_regional.png")
 print("  - results/count_prediction_comparison_regional.png")
 
