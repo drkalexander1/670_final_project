@@ -742,18 +742,6 @@ class NeuralNetworkModel:
             )
         ]
         
-        # Debug: Check train_targets shape right before fit
-        if isinstance(train_targets, dict):
-            if 'species_predictions' in train_targets:
-                y_debug = train_targets['species_predictions']
-                print(f"  DEBUG models.py: train_targets['species_predictions'].shape={y_debug.shape}, ndim={y_debug.ndim}")
-                if y_debug.ndim != 2:
-                    raise ValueError(f"train_targets['species_predictions'] is not 2D right before fit: shape={y_debug.shape}")
-        elif isinstance(train_targets, np.ndarray):
-            print(f"  DEBUG models.py: train_targets.shape={train_targets.shape}, ndim={train_targets.ndim}")
-            if train_targets.ndim != 2:
-                raise ValueError(f"train_targets is not 2D right before fit: shape={train_targets.shape}")
-        
         history = self.model.fit(
             train_inputs, train_targets,
             validation_data=val_data,

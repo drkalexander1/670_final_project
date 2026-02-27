@@ -18,6 +18,8 @@ from feature_engineering import (
     create_species_features
 )
 try:
+    # feature_engineering_simple is an optional lightweight alternative to feature_engineering.
+    # It is not included in this repo; the import gracefully falls back to None if absent.
     from feature_engineering_simple import extract_features_from_summaries
 except ImportError:
     extract_features_from_summaries = None

@@ -543,10 +543,6 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
                 train_indices = np.atleast_1d(train_indices)
                 val_indices = np.atleast_1d(val_indices)
                 
-                # Ensure indices are arrays (not scalars) to maintain 2D shape when indexing
-                train_indices = np.atleast_1d(train_indices)
-                val_indices = np.atleast_1d(val_indices)
-                
                 X_train = fold_data['train_X'][train_indices]
                 y_train = fold_data['train_y'][train_indices]
                 X_val = fold_data['train_X'][val_indices]
@@ -555,11 +551,6 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
                 # Ensure y_train and y_val are contiguous copies (not views) to prevent shape issues
                 y_train = np.ascontiguousarray(y_train.copy(), dtype=np.float32)
                 y_val = np.ascontiguousarray(y_val.copy(), dtype=np.float32)
-                
-                # Debug: print shapes to help diagnose
-                print(f"  DEBUG: train_y shape: {fold_data['train_y'].shape}, train_indices shape: {train_indices.shape}, y_train shape: {y_train.shape}")
-                print(f"  DEBUG: X_train shape: {X_train.shape}, y_train shape: {y_train.shape}, y_train.ndim: {y_train.ndim}")
-                print(f"  DEBUG: y_train is view: {not y_train.flags['OWNDATA']}, y_val is view: {not y_val.flags['OWNDATA']}")
                 
                 # Ensure y_train and y_val are 2D
                 if y_train.ndim == 1:
@@ -608,11 +599,7 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
                             all_train_counts = np.array(all_train_counts, dtype=np.float32)
                             train_bird_counts = all_train_counts[train_indices]
                             val_bird_counts = all_train_counts[val_indices]
-                            print(f"  DEBUG: Extracted bird counts - all_train_counts.shape={all_train_counts.shape}, "
-                                  f"train_bird_counts.shape={train_bird_counts.shape}, val_bird_counts.shape={val_bird_counts.shape}")
                         else:
-                            print(f"  DEBUG: Bird count extraction failed - len(all_train_counts)={len(all_train_counts)}, "
-                                  f"fold_data['train_X'].shape[0]={fold_data['train_X'].shape[0]}")
                             train_bird_counts = None
                             val_bird_counts = None
                 
@@ -646,14 +633,9 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
                         # Ensure feature arrays are contiguous copies
                         X_train_features = np.ascontiguousarray(X_train_features.copy(), dtype=np.float32)
                         X_val_features = np.ascontiguousarray(X_val_features.copy(), dtype=np.float32)
-                        print(f"  DEBUG: Features extracted - X_train_features.shape={X_train_features.shape}, "
-                              f"X_val_features.shape={X_val_features.shape}, "
-                              f"train_features_full.shape={train_features_full.shape}")
                 
                 if X_train_features is not None:
                     if train_bird_counts is not None:
-                        # Debug: Check shapes right before fit
-                        print(f"  DEBUG train.py (with features): y_train.shape={y_train.shape}, y_train.ndim={y_train.ndim}, y_val.shape={y_val.shape}, y_val.ndim={y_val.ndim}, train_bird_counts.shape={train_bird_counts.shape if train_bird_counts is not None else None}")
                         if y_train.ndim != 2:
                             raise ValueError(f"y_train is not 2D right before model.fit(): shape={y_train.shape}")
                         if y_val.ndim != 2:
@@ -663,8 +645,6 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
                                                      validation_data=(X_val, X_val_features, y_val, val_bird_counts),
                                                      epochs=50, batch_size=128, verbose=0)
                     else:
-                        # Debug: Check shapes right before fit
-                        print(f"  DEBUG train.py (with features, no counts): y_train.shape={y_train.shape}, y_train.ndim={y_train.ndim}, y_val.shape={y_val.shape}, y_val.ndim={y_val.ndim}")
                         if y_train.ndim != 2:
                             raise ValueError(f"y_train is not 2D right before model.fit(): shape={y_train.shape}")
                         if y_val.ndim != 2:
@@ -674,8 +654,6 @@ def train_and_evaluate_cv(transitions_df: pd.DataFrame,
                                                      epochs=50, batch_size=128, verbose=0)
                 else:
                     if train_bird_counts is not None:
-                        # Debug: Check shapes right before fit
-                        print(f"  DEBUG train.py: y_train.shape={y_train.shape}, y_train.ndim={y_train.ndim}, y_val.shape={y_val.shape}, y_val.ndim={y_val.ndim}, train_bird_counts.shape={train_bird_counts.shape if train_bird_counts is not None else None}")
                         if y_train.ndim != 2:
                             raise ValueError(f"y_train is not 2D right before model.fit(): shape={y_train.shape}")
                         if y_val.ndim != 2:
