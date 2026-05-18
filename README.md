@@ -1,5 +1,22 @@
 # Bird Species Prediction - Final Project
 
+## Research Question
+
+Can we predict which bird species an eBird observer will report in the coming year, 
+based on their historical activity? This project shifts focus from the observed birds 
+— their abundance, migration patterns, habitat usage — to the observers themselves, 
+who generate the data underlying ecological research.
+
+Understanding observer behavior addresses a persistent challenge in citizen science: 
+observation bias. eBird data reflects not just where birds are, but where birders go. 
+Modeling observer patterns helps organizations like the Cornell Lab of Ornithology 
+interpret systematic gaps in coverage, identify emerging hotspots, and improve 
+population abundance estimates that depend on standardizing for observer effort.
+
+The problem also has an economic dimension: predicting where observers concentrate 
+highlights habitat value, informs wildlife management and conservation resource 
+allocation, and connects ecological health to local tourism and policy.
+
 ## Project Overview
 
 This project predicts which bird species a birder will view **next year** based on their viewing patterns from the **current year**. The dataset contains birding checklists from 2018–2023 with approximately 13.6 billion observations. The project implements both **species prediction** (classification) and **count prediction** (regression) tasks.
